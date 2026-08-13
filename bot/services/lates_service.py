@@ -46,7 +46,7 @@ class LatesService:
             res = await query.execute()
             count = len(res.data) if res.data else 0
 
-            ping_url = os.getenv("HEALTHCHECK_URL")
+            ping_url = os.getenv("MIDNIGHT_CLEANUP_URL")
             if ping_url:
                 async with aiohttp.ClientSession() as session:
                     await session.get(ping_url)

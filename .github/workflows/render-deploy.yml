@@ -37,8 +37,8 @@ jobs:
                   },
                   {
                     "envVar": {
-                      "key": "HEALTHCHECK_URL",
-                      "value": "${{ secrets.HEALTHCHECK_URL }}"
+                      "key": "MIDNIGHT_CLEANUP_URL",
+                      "value": "${{ secrets.MIDNIGHT_CLEANUP_RUL }}"
                     }
                   }
                 ]'
