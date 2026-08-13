@@ -43,17 +43,29 @@ class Bot(commands.Bot):
         install_http_monitoring_hook(self)
         print("Installed proactive rate limit monitor.")
 
-        db_url = os.environ.get("SUPABASE_DB_URL")
-        if db_url:
-            print("Verifying database schema...")
-            await ensure_tables_exist(db_url)
-        else:
-            print("WARNING: SUPABASE_DB_URL not found. Skipping schema creation.")
+        try:
+            db_url = os.environ.get("SUPABASE_DB_URL")
+            if db_url:
+                print("Verifying database schema...")
+                await ensure_tables_exist(db_url)
+            else:
+                print("WARNING: SUPABASE_DB_URL not found. Skipping schema creation.")
+        except Exception:
+            logger.exception("Failed to verify database schema")
 
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_SERVICE_KEY")
-        self.supabase = await create_async_client(url, key)
-        print("Async Supabase client initialized")
+        try:
+            url = os.environ.get("SUPABASE_URL")
+            key = os.environ.get("SUPABASE_SERVICE_KEY")
+            if url and key:
+                self.supabase = await create_async_client(url, key)
+                print("Async Supabase client initialized")
+            else:
+                print(
+                    "WARNING: SUPABASE_URL or SUPABASE_SERVICE_KEY not found. "
+                    "Skipping Supabase client initialization."
+                )
+        except Exception:
+            logger.exception("Failed to initialize Supabase client")
 
         for extension in EXTENSIONS:
             try:
@@ -71,12 +83,12 @@ class Bot(commands.Bot):
             # 1. Check if the bot's internal websocket is closed
             if self.is_closed():
                 print("Bot connection is closed. Skipping heartbeat.")
-                return
+                return None
 
             # 2. (Optional) Check latency to ensure it's not severely lagging
             if self.latency > 1.0:  # Latency is over 1000ms
                 print(f"High gateway latency ({self.latency}s). Skipping heartbeat.")
-                return
+                return None
 
             # NEW: Check for recent HTTP rate limiting
             if (
@@ -88,7 +100,7 @@ class Bot(commands.Bot):
                     f"Bot was rate-limited within the last {self.RATE_LIMIT_UNHEALTHY_SECONDS / 60:.0f} "
                     f"minutes. Skipping healthy heartbeat."
                 )
-                return
+                return None
 
             # 3. If everything is healthy, ping the healthcheck URL
             ping_url = os.getenv("HEALTHCHECK_DISCORD_URL")
