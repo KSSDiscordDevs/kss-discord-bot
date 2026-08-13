@@ -103,7 +103,7 @@ class Bot(commands.Bot):
                 return None
 
             # 3. If everything is healthy, ping the healthcheck URL
-            ping_url = os.getenv("HEALTHCHECK_DISCORD_URL")
+            ping_url = os.getenv("GATEWAY_HEALTHCHECK_URL")
             if ping_url:
                 async with aiohttp.ClientSession() as session:
                     await session.get(ping_url)
