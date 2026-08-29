@@ -745,9 +745,9 @@ class ParkingServiceTests(unittest.TestCase):
         expected_mon = datetime(2023, 10, 24, 0, 0, tzinfo=tz)
         self.assertEqual(service.get_staff_cutoff(now_mon), expected_mon)
 
-        # Scenario 2: Friday -> 2 AM Saturday
+        # Scenario 2: Friday -> 2 AM Sunday
         now_fri = datetime(2023, 10, 27, 10, 0, tzinfo=tz)  # A Friday
-        expected_fri = datetime(2023, 10, 28, 2, 0, tzinfo=tz)
+        expected_fri = datetime(2023, 10, 29, 2, 0, tzinfo=tz)
         self.assertEqual(service.get_staff_cutoff(now_fri), expected_fri)
 
         # Scenario 3: Saturday -> 2 AM Sunday

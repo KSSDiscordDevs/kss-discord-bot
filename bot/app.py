@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 
 import discord
 from discord import app_commands
@@ -11,14 +12,13 @@ from supabase import AsyncClient, create_async_client
 
 from bot.config import EXTENSIONS, GUILD_ID, MY_GUILD
 from bot.utils.database import ensure_tables_exist
-from bot.utils.discord_http_logging import install_discord_http_rate_limit_logging
+from bot.utils.http_monitoring import install_http_monitoring_hook
 from discord.ext import tasks
 import requests
 import aiohttp
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-install_discord_http_rate_limit_logging()
 
 
 class Bot(commands.Bot):
@@ -35,20 +35,37 @@ class Bot(commands.Bot):
         self.supabase: AsyncClient | None = None
         self.meal_cache = []
         self._ready_once = False
+        self.last_rate_limit_timestamp: float | None = None
+        self.RATE_LIMIT_UNHEALTHY_SECONDS = 300  # 5 minutes
 
     async def setup_hook(self):
         """Load configured extensions and sync slash commands to the development guild."""
-        db_url = os.environ.get("SUPABASE_DB_URL")
-        if db_url:
-            print("Verifying database schema...")
-            await ensure_tables_exist(db_url)
-        else:
-            print("WARNING: SUPABASE_DB_URL not found. Skipping schema creation.")
+        install_http_monitoring_hook(self)
+        print("Installed proactive rate limit monitor.")
 
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_SERVICE_KEY")
-        self.supabase = await create_async_client(url, key)
-        print("Async Supabase client initialized")
+        try:
+            db_url = os.environ.get("SUPABASE_DB_URL")
+            if db_url:
+                print("Verifying database schema...")
+                await ensure_tables_exist(db_url)
+            else:
+                print("WARNING: SUPABASE_DB_URL not found. Skipping schema creation.")
+        except Exception:
+            logger.exception("Failed to verify database schema")
+
+        try:
+            url = os.environ.get("SUPABASE_URL")
+            key = os.environ.get("SUPABASE_SERVICE_KEY")
+            if url and key:
+                self.supabase = await create_async_client(url, key)
+                print("Async Supabase client initialized")
+            else:
+                print(
+                    "WARNING: SUPABASE_URL or SUPABASE_SERVICE_KEY not found. "
+                    "Skipping Supabase client initialization."
+                )
+        except Exception:
+            logger.exception("Failed to initialize Supabase client")
 
         for extension in EXTENSIONS:
             try:
@@ -58,6 +75,7 @@ class Bot(commands.Bot):
                 print(f"Failed to load {extension}: {e}")
 
         self.heartbeat_monitor.start()
+        self.api_health_prober.start()
 
     @tasks.loop(minutes=3.0)
     async def heartbeat_monitor(self):
@@ -65,15 +83,27 @@ class Bot(commands.Bot):
             # 1. Check if the bot's internal websocket is closed
             if self.is_closed():
                 print("Bot connection is closed. Skipping heartbeat.")
-                return
+                return None
 
             # 2. (Optional) Check latency to ensure it's not severely lagging
             if self.latency > 1.0:  # Latency is over 1000ms
                 print(f"High gateway latency ({self.latency}s). Skipping heartbeat.")
-                return
+                return None
+
+            # NEW: Check for recent HTTP rate limiting
+            if (
+                self.last_rate_limit_timestamp
+                and (time.monotonic() - self.last_rate_limit_timestamp)
+                < self.RATE_LIMIT_UNHEALTHY_SECONDS
+            ):
+                print(
+                    f"Bot was rate-limited within the last {self.RATE_LIMIT_UNHEALTHY_SECONDS / 60:.0f} "
+                    f"minutes. Skipping healthy heartbeat."
+                )
+                return None
 
             # 3. If everything is healthy, ping the healthcheck URL
-            ping_url = os.getenv("HEALTHCHECK_DISCORD_URL")
+            ping_url = os.getenv("GATEWAY_HEALTHCHECK_URL")
             if ping_url:
                 async with aiohttp.ClientSession() as session:
                     await session.get(ping_url)
@@ -86,6 +116,33 @@ class Bot(commands.Bot):
     @heartbeat_monitor.before_loop
     async def before_heartbeat(self):
         # Wait until the bot is fully logged in before starting the loop
+        await self.wait_until_ready()
+
+    @tasks.loop(minutes=5.0)
+    async def api_health_prober(self):
+        """Periodically make a benign API call to proactively check for rate-limiting."""
+        try:
+            if self.is_closed():
+                # Don't run if the bot is disconnected.
+                return
+
+            # A lightweight, read-only request that has no side-effects.
+            # Fetching the bot's own user object is a safe and reliable check.
+            await self.fetch_user(self.user.id)
+            print("API health probe successful.")
+        except discord.HTTPException as e:
+            # The RateLimitMonitorHandler will have already caught a 429.
+            # This log is for other potential HTTP issues during the probe.
+            if e.status != 429:
+                logger.warning(
+                    "API health probe failed with non-429 HTTP error.",
+                    extra={"status": e.status, "code": e.code},
+                )
+        except Exception:
+            logger.exception("Unhandled error in API health prober task.")
+
+    @api_health_prober.before_loop
+    async def before_api_health_prober(self):
         await self.wait_until_ready()
 
     async def on_ready(self):

@@ -664,9 +664,10 @@ class ParkingService:
 
     def get_staff_cutoff(self, now: datetime) -> datetime:
         """Calculate the actual cutoff datetime for the current staff parking window."""
-        # If it's Friday or Saturday, the window ends at 2 AM the next day.
-        if now.weekday() == FR.weekday or now.weekday() == SA.weekday:
-            return (now + timedelta(days=1)).replace(
+        # If it's Friday or Saturday, the window ends at 2 AM on Sunday.
+        if now.weekday() in [FR.weekday, SA.weekday]:
+            days_until_sunday = SU.weekday - now.weekday()
+            return (now + timedelta(days=days_until_sunday)).replace(
                 hour=WEEKEND_GUEST_HOURS_END, minute=0, second=0, microsecond=0
             )
 
@@ -677,4 +678,6 @@ class ParkingService:
             )
 
         # Otherwise (Sun-Thu), the window ends at midnight of the next day.
-        return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )

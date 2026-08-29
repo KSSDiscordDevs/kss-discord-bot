@@ -554,7 +554,13 @@ class Parking(commands.Cog):
             )
 
             if level == "default":
-                if not blocks:
+                # If there are no claims, the "next" availability is just the standard
+                # window, which is already summarized in the header. Don't show detail.
+                if not spot_claims:
+                    staff_lines.append(f"**Spot {i + 1}**: {header}")
+                    continue
+
+                if not blocks or len(blocks) == 1:
                     staff_lines.append(f"**Spot {i + 1}**: {header}")
                     continue
 
@@ -565,9 +571,10 @@ class Parking(commands.Cog):
                 if not future_blocks:
                     staff_lines.append(f"**Spot {i + 1}**: {header}")
                 else:
+                    # Add day to time format to avoid ambiguity across midnight
                     detail = "\n".join(
                         [
-                            f"- NEXT {block[0].strftime('%I%p')}-{block[1].strftime('%I%p')}"
+                            f"- NEXT {block[0].strftime('%a %I%p')}-{block[1].strftime('%a %I%p')}"
                             for block in future_blocks
                         ]
                     )

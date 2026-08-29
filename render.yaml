@@ -10,7 +10,7 @@ services:
         sync: FALSE
       - key: GUILD_ID
         sync: FALSE
-      - key: HEALTHCHECK_URL
+      - key: MIDNIGHT_CLEANUP_URL
         sync: FALSE
       - key: SUPABASE_URL
         sync: FALSE
