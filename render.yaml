@@ -18,3 +18,7 @@ services:
         sync: FALSE
       - key: SUPABASE_SERVICE_KEY
         sync: FALSE
+      - key: GATEWAY_HEALTHCHECK_URL
+        sync: FALSE
+      - key: GEMINI_API_KEY
+        sync: FALSE
