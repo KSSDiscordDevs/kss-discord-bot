@@ -103,11 +103,9 @@ class Bot(commands.Bot):
                 return None
 
             # 3. If everything is healthy, ping the healthcheck URL
-            ping_url_deprecated = os.getenv("GATEWAY_HEALTHCHECK_URL_DEPRECATED")
             ping_url = os.getenv("GATEWAY_HEALTHCHECK_URL")
             if ping_url:
                 async with aiohttp.ClientSession() as session:
-                    await session.get(ping_url_deprecated)
                     await session.get(ping_url)
 
                 print("Heartbeat sent successfully.")
