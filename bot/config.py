@@ -21,6 +21,7 @@ EXTENSIONS = [
     "bot.cogs.general",
     "bot.cogs.feedback",
     "bot.cogs.roles",
+    "bot.cogs.interests",
     # "bot.cogs.gemini_chat",
 ]
 LOCAL_TZ = pytz.timezone("America/Chicago")
@@ -74,6 +75,23 @@ STRATFORDITE_ROLE_ID = 1402660051008622734
 ALUMNI_ROLE_ID = 1407422324847673397
 
 RA_LOG_CHANNEL_ID = 1501386295140679750
+
+# --- Interest Channels Settings ---
+# Opt-in channels that members can join/leave themselves via the dropdown spawned
+# by /spawn_interest_menu. Access is granted with a per-member channel permission
+# overwrite, so no extra roles are needed. The bot must be able to view each
+# channel listed here. Up to 25 entries (Discord select menu limit).
+INTEREST_CHANNELS = [
+    {
+        "channel_id": 1446951268495917240,
+        "label": "Ice Skating",
+        "description": "Skating trips and meetups",
+        "emoji": "⛸️",
+    },
+    # Add more channels here as they are created, e.g.:
+    # {"channel_id": 0, "label": "Intramurals", "description": "IM sports teams", "emoji": "🏀"},
+    # {"channel_id": 0, "label": "Study", "description": "Study sessions", "emoji": "📚"},
+]
 
 # --- Discord API Settings ---
 DISCORD_EMBED_FIELD_VALUE_LIMIT = 1024
