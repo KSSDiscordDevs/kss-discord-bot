@@ -88,6 +88,12 @@ INTEREST_CHANNELS = [
         "description": "Skating trips and meetups",
         "emoji": "⛸️",
     },
+    {
+        "channel_id": 1547371525336858664,
+        "label": "Study",
+        "description": "Group study",
+        "emoji": "📒",
+    },
     # Add more channels here as they are created, e.g.:
     # {"channel_id": 0, "label": "Intramurals", "description": "IM sports teams", "emoji": "🏀"},
     # {"channel_id": 0, "label": "Study", "description": "Study sessions", "emoji": "📚"},
