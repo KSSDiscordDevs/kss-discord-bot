@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import discord
 import discord.http
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _installed = False
 _original_request = None
+_on_rate_limit: Callable[[], None] | None = None
 
 HTTP_TOO_MANY_REQUESTS = 429
 
@@ -37,28 +38,51 @@ def build_rate_limit_log_context(
         "x_ratelimit_remaining": headers.get("X-RateLimit-Remaining"),
         "x_ratelimit_reset_after": headers.get("X-RateLimit-Reset-After"),
         "x_ratelimit_global": headers.get("X-RateLimit-Global"),
+        # Discord's own API responses always carry a Via header; Cloudflare's
+        # "You are being rate limited" HTML page does not. A 429 without Via is a
+        # block on this host's IP address, not a per-route rate limit.
+        "likely_cloudflare_block": not headers.get("Via"),
     }
 
 
 async def _traced_request(self, route, *, files=None, form=None, **kwargs):
-    """Wrap Discord HTTP requests so 429 responses log their route details."""
+    """Wrap Discord HTTP requests so raised 429s are logged and reported.
+
+    discord.py handles JSON rate limits internally (sleep and retry). The only
+    429s that reach this wrapper as exceptions are the ones discord.py gives up
+    on, which in practice means Cloudflare IP blocks and over-long retry windows.
+    """
     try:
         return await _original_request(self, route, files=files, form=form, **kwargs)
     except discord.HTTPException as exc:
         if exc.status == HTTP_TOO_MANY_REQUESTS:
             logger.warning(
-                "Discord HTTP rate limit hit",
+                "Discord HTTP 429 raised for %s %s",
+                getattr(route, "method", "?"),
+                getattr(route, "path", "?"),
                 extra=build_rate_limit_log_context(
                     route, getattr(exc, "response", None), exc
                 ),
             )
+            if _on_rate_limit is not None:
+                try:
+                    _on_rate_limit()
+                except Exception:
+                    logger.exception("Rate limit callback failed")
         raise
 
 
-def install_discord_http_rate_limit_logging():
-    """Install the Discord HTTP 429 logging wrapper once per process."""
-    global _installed, _original_request
+def install_discord_http_rate_limit_logging(
+    on_rate_limit: Callable[[], None] | None = None,
+):
+    """Install the Discord HTTP 429 wrapper once per process.
 
+    ``on_rate_limit`` is called (with no arguments) every time a 429 is raised
+    through the wrapper. Calling this again only updates the callback.
+    """
+    global _installed, _original_request, _on_rate_limit
+
+    _on_rate_limit = on_rate_limit
     if _installed:
         return
 

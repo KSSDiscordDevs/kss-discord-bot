@@ -5,3 +5,5 @@
 9/9/2026 Fix the interest menu: picking a channel now shows explicit Join / Leave buttons instead of silently toggling access (which removed members who had been added by hand), and the dropdown resets after each use so the same channel can be selected again.
 
 9/9/2026 Interest menu: show plain channel names (e.g. **#kss-study**) instead of clickable mentions wherever the reader may not have access, since Discord renders mentions of hidden channels as "No Access".
+
+9/21/2026 Monitoring: treat every HTTP 429 as unhealthy, including Cloudflare IP blocks that discord.py raises without logging. The API probe, the slash-command error handler, and a request-level hook all feed one tracker, and the gateway heartbeat is withheld while it is unhealthy so Healthchecks.io alerts within minutes instead of staying green through an outage. Also line-buffer stdout and route the bot's own INFO logs to Render.
