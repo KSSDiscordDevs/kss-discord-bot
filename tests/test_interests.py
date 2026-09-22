@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from bot.cogs.interests import InterestSelect, JoinLeaveView
+from bot.cogs.interests import (
+    InterestSelect,
+    Interests,
+    JoinLeaveView,
+    channel_display,
+)
 from bot.services.interest_service import InterestService
 
 
@@ -189,6 +194,58 @@ class JoinLeaveViewTests(unittest.IsolatedAsyncioTestCase):
 
         content = interaction.response.edit_message.await_args.kwargs["content"]
         self.assertIn("don't have permission", content)
+
+
+class ChannelDisplayTests(unittest.IsolatedAsyncioTestCase):
+    """Channel references must stay readable for members without access."""
+
+    def test_mention_when_member_has_access(self):
+        channel = make_channel(name="ice-skating")
+        self.assertEqual(channel_display(channel, True), "#ice-skating")
+
+    def test_plain_name_when_member_lacks_access(self):
+        channel = make_channel(name="ice-skating")
+        self.assertEqual(channel_display(channel, False), "**#ice-skating**")
+
+    async def test_prompt_uses_plain_name_without_access(self):
+        with patch("bot.cogs.interests.INTEREST_CHANNELS", TEST_INTERESTS):
+            select = InterestSelect(InterestService())
+        select._values = ["111"]
+        channel = make_channel(name="kss-study", member_can_view=None)
+        channel.mention = "<#111>"
+        interaction = make_interaction(channel)
+
+        await select.callback(interaction)
+
+        message = interaction.response.send_message.await_args.args[0]
+        self.assertIn("**#kss-study**", message)
+        self.assertNotIn("<#111>", message)
+
+    async def test_leave_confirmation_uses_plain_name(self):
+        channel = make_channel(name="kss-study", member_can_view=True)
+        channel.mention = "<#111>"
+        view = JoinLeaveView(InterestService(), channel, has_access=True)
+        interaction = make_interaction(channel)
+
+        await view.leave_button.callback(interaction)
+
+        content = interaction.response.edit_message.await_args.kwargs["content"]
+        self.assertIn("**#kss-study**", content)
+        self.assertNotIn("<#111>", content)
+
+    async def test_spawned_embed_never_uses_mentions(self):
+        channel = make_channel(name="ice-skating")
+        interaction = make_interaction(channel)
+        interaction.response.defer = AsyncMock()
+        interaction.channel = SimpleNamespace(send=AsyncMock())
+        cog = Interests(bot=SimpleNamespace(supabase=None, add_view=MagicMock()))
+
+        with patch("bot.cogs.interests.INTEREST_CHANNELS", TEST_INTERESTS):
+            await cog.spawn_interest_menu.callback(cog, interaction)
+
+        embed = interaction.channel.send.await_args.kwargs["embed"]
+        self.assertIn("**Ice Skating** (#ice-skating)", embed.description)
+        self.assertNotIn("<#", embed.description)
 
 
 if __name__ == "__main__":

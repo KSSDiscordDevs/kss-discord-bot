@@ -100,6 +100,19 @@ INTEREST_CHANNELS = [
     # {"channel_id": 0, "label": "Study", "description": "Study sessions", "emoji": "📚"},
 ]
 
+# --- Monitoring Settings ---
+# The gateway heartbeat pings Healthchecks.io every GATEWAY_HEARTBEAT_MINUTES while
+# the bot is healthy. The API probe makes one harmless REST call every
+# API_HEALTH_PROBE_MINUTES so an HTTP-level block (a Discord rate limit or a
+# Cloudflare ban on this host's shared IP) is noticed even when nobody is running
+# commands. Any HTTP 429 withholds the heartbeat for RATE_LIMIT_UNHEALTHY_SECONDS,
+# which is deliberately longer than one probe interval so back-to-back failed
+# probes keep it withheld and Healthchecks.io raises an alert.
+GATEWAY_HEARTBEAT_MINUTES = 3.0
+API_HEALTH_PROBE_MINUTES = 5.0
+RATE_LIMIT_UNHEALTHY_SECONDS = int(API_HEALTH_PROBE_MINUTES * 60 * 2)
+HIGH_GATEWAY_LATENCY_SECONDS = 1.0
+
 # --- Discord API Settings ---
 DISCORD_EMBED_FIELD_VALUE_LIMIT = 1024
 TRUNCATION_SUFFIX = "..."

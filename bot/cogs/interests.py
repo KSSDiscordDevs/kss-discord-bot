@@ -10,9 +10,21 @@ from bot.services.interest_service import InterestService
 logger = logging.getLogger(__name__)
 
 PERMISSION_ERROR_MSG = (
-    "⚠️ I don't have permission to manage access to {mention}. "
+    "⚠️ I don't have permission to manage access to {channel}. "
     "Please ask an RA or Server Admin."
 )
+
+
+def channel_display(channel: discord.abc.GuildChannel, has_access: bool) -> str:
+    """Return a channel reference the reader can actually read.
+
+    Discord renders a channel mention as "No Access" for anyone who can't see the
+    channel, which hides the name from exactly the people deciding whether to
+    join. Use the clickable mention only when the member has access; otherwise
+    fall back to the plain name.
+    """
+    return channel.mention if has_access else f"**#{channel.name}**"
+
 
 # --- UI Components ---
 
@@ -55,8 +67,12 @@ class JoinLeaveView(discord.ui.View):
                 "Missing permission to edit overwrites on #%s", self.channel.name
             )
             return await self._finish(
-                interaction, PERMISSION_ERROR_MSG.format(mention=self.channel.mention)
+                interaction,
+                PERMISSION_ERROR_MSG.format(
+                    channel=channel_display(self.channel, has_access=False)
+                ),
             )
+        # The member has access now, so the clickable mention renders correctly.
         await self._finish(
             interaction, f"✅ You now have access to {self.channel.mention}."
         )
@@ -72,11 +88,16 @@ class JoinLeaveView(discord.ui.View):
                 "Missing permission to edit overwrites on #%s", self.channel.name
             )
             return await self._finish(
-                interaction, PERMISSION_ERROR_MSG.format(mention=self.channel.mention)
+                interaction,
+                PERMISSION_ERROR_MSG.format(
+                    channel=channel_display(self.channel, has_access=True)
+                ),
             )
+        # The member can no longer see the channel, so use the plain name.
         await self._finish(
             interaction,
-            f"👋 You have left {self.channel.mention}. Use the menu again any time to rejoin.",
+            f"👋 You have left {channel_display(self.channel, has_access=False)}. "
+            "Use the menu again any time to rejoin.",
         )
 
 
@@ -114,10 +135,11 @@ class InterestSelect(discord.ui.Select):
             return
 
         has_access = self.service.has_access(channel, interaction.user)
+        display = channel_display(channel, has_access)
         status = (
-            f"You currently **have access** to {channel.mention}."
+            f"You currently **have access** to {display}."
             if has_access
-            else f"You currently **don't have access** to {channel.mention}."
+            else f"You currently **don't have access** to {display}."
         )
         await interaction.response.send_message(
             f"{status} What would you like to do?",
@@ -184,10 +206,14 @@ class Interests(commands.Cog):
                 ephemeral=True,
             )
 
-        channel_list = "\n".join(
-            f"{entry.get('emoji', '•')} <#{entry['channel_id']}>"
-            for entry in INTEREST_CHANNELS
-        )
+        # The menu is one shared message read by people with and without access,
+        # so never use mentions here: they render as "No Access" for outsiders.
+        lines = []
+        for entry in INTEREST_CHANNELS:
+            channel = interaction.guild.get_channel(entry["channel_id"])
+            name = f" (#{channel.name})" if channel else ""
+            lines.append(f"{entry.get('emoji', '•')} **{entry['label']}**{name}")
+        channel_list = "\n".join(lines)
         embed = discord.Embed(
             title="Interest Channels",
             description=(
