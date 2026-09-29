@@ -95,6 +95,18 @@ INTEREST_CHANNELS = [
         "description": "Group study",
         "emoji": "📒",
     },
+    {
+        "channel_id": 1554169487052513401,
+        "label": "Tim Keller Discussion Group",
+        "description": "Tim Keller Discussion Group",
+        "emoji": "📖🎙️🗽",
+    },
+    {
+        "channel_id": 1554304468965793864,
+        "label": "Professional Development",
+        "description": "Professional Development Help and Advice",
+        "emoji": "🤝📈🌟",
+    },
     # Add more channels here as they are created, e.g.:
     # {"channel_id": 0, "label": "Intramurals", "description": "IM sports teams", "emoji": "🏀"},
     # {"channel_id": 0, "label": "Study", "description": "Study sessions", "emoji": "📚"},
