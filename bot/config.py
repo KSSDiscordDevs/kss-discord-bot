@@ -107,6 +107,12 @@ INTEREST_CHANNELS = [
         "description": "Professional Development Help and Advice",
         "emoji": "🤝",
     },
+    {
+        "channel_id": 1559628363587522620,
+        "label": "Pokemon Go",
+        "description": "Pokemon Go Community",
+        "emoji": "🐭",
+    },
     # Add more channels here as they are created, e.g.:
     # {"channel_id": 0, "label": "Intramurals", "description": "IM sports teams", "emoji": "🏀"},
     # {"channel_id": 0, "label": "Study", "description": "Study sessions", "emoji": "📚"},
