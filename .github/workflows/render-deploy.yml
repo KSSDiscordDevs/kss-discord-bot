@@ -1,66 +1,33 @@
 name: Deploy to Render
 
+# Render auto-deploys this service on every push to main, so this workflow only
+# asks Render to start a deploy explicitly (useful if auto-deploy is ever turned
+# off). It deliberately does NOT touch environment variables: Render's
+# PUT /env-vars endpoint replaces the service's entire environment with the list
+# provided, so the previous version of this workflow would have wiped
+# SUPABASE_URL, SUPABASE_DB_URL, GUILD_ID and GATEWAY_HEALTHCHECK_URL from the
+# live service on every push (it only ever "worked" because RENDER_SERVICE_ID
+# pointed at a deleted service). Manage env vars in the Render dashboard.
+
 on:
   push:
     branches:
-      - main # This triggers the workflow when you push to the main branch
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Update Secrets on Render
+      - name: Trigger Render deploy
         run: |
-          curl --request PUT \
-              --url https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/env-vars \
-              --header 'Accept: application/json' \
-              --header 'Authorization: Bearer ${{ secrets.RENDER_API_KEY }}' \
-              --header 'Content-Type: application/json' \
-              --data '[
-                  {
-                    "envVar": {
-                      "key": "DISCORD_TOKEN",
-                      "value": "${{ secrets.DISCORD_TOKEN }}"
-                    }
-                  },
-                  {
-                    "envVar": {
-                      "key": "SUPABASE_RULE",
-                      "value": "${{ secrets.SUPABASE_RULE }}"
-                    }
-                  },
-                  {
-                    "envVar": {
-                      "key": "SUPABASE_SERVICE_KEY",
-                      "value": "${{ secrets.SUPABASE_SERVICE_KEY }}"
-                    }
-                  },
-                  {
-                    "envVar": {
-                      "key": "MIDNIGHT_CLEANUP_URL",
-                      "value": "${{ secrets.MIDNIGHT_CLEANUP_RUL }}"
-                    }
-                  }
-                ]'
-      - name: Update Secrets on Render
-        run: |
-          curl --request PUT \
-               --url https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/env-vars \
+          set -euo pipefail
+          response=$(curl --silent --show-error --request POST \
+               --url "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
                --header 'Accept: application/json' \
                --header 'Authorization: Bearer ${{ secrets.RENDER_API_KEY }}' \
-               --header 'Content-Type: application/json' \
-               --data '[
-                 {
-                   "envVar": {
-                     "key": "DISCORD_TOKEN",
-                     "value": "${{ secrets.DISCORD_TOKEN }}"
-                   }
-                 }
-               ]'
-
-      - name: Trigger Deploy
-        run: |
-          curl --request POST \
-               --url https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys \
-               --header 'Accept: application/json' \
-               --header 'Authorization: Bearer ${{ secrets.RENDER_API_KEY }}'
+               --write-out '\n%{http_code}')
+          body=$(echo "$response" | sed '$d')
+          code=$(echo "$response" | tail -n1)
+          echo "Render responded HTTP $code"
+          echo "$body"
+          [ "$code" -ge 200 ] && [ "$code" -lt 300 ]
