@@ -9,11 +9,10 @@ from bot.web.keep_alive import keep_alive
 
 
 def configure_output_buffering():
-    """Line-buffer stdout/stderr so log lines reach Render as they happen.
+    """Line-buffer stdout/stderr so log lines reach the host as they happen.
 
-    Render captures output through a pipe, so Python block-buffers print() and
-    lines can show up hours late or all at once. That hid the startup and
-    heartbeat messages during the 2026-09-21 outage.
+    Hosts capture output through a pipe, so Python block-buffers print() unless
+    output is explicitly line-buffered.
     """
     for stream in (sys.stdout, sys.stderr):
         try:

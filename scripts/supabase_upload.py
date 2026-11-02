@@ -3,14 +3,17 @@ import os
 import sys
 from pathlib import Path
 
-from flask.cli import load_dotenv
-from supabase import create_client
+from dotenv import load_dotenv
+from postgrest import SyncPostgrestClient
 
 # Initialize Supabase
 load_dotenv()
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_KEY")
-supabase = create_client(url, key)
+supabase = SyncPostgrestClient(
+    f"{url.rstrip('/')}/rest/v1",
+    headers={"apikey": key, "Authorization": f"Bearer {key}"},
+)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 

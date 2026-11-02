@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from supabase import AsyncClient
+from postgrest import AsyncPostgrestClient
 
 from bot.config import LOCAL_TZ
 from bot.utils.meal_calendar import AcademicBreak, MealCalendarConfig
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class MealsService:
     """Handles data fetching, caching, and business logic for the meal system."""
 
-    def __init__(self, bot, supabase: AsyncClient):
+    def __init__(self, bot, supabase: AsyncPostgrestClient):
         """Initialize the service with the bot reference and a shared Supabase client."""
         self.bot = bot
         self.supabase = supabase
