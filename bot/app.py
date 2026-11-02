@@ -96,12 +96,15 @@ class Bot(commands.Bot):
     @tasks.loop(minutes=SERVICE_HEARTBEAT_MINUTES)
     async def service_heartbeat(self):
         """Ping healthchecks.io as long as the service is up."""
-        ping_url = os.getenv("UPTIME_CHECK_URL")
+        try:
+            ping_url = os.getenv("UPTIME_CHECK_URL")
 
-        async with aiohttp.ClientSession() as session:
-            await session.get(ping_url)
+            async with aiohttp.ClientSession() as session:
+                await session.get(ping_url)
 
-        logger.info("Uptime heartbeat sent succesfully.")
+            logger.info("Uptime heartbeat sent succesfully.")
+        except Exception:
+            logger.exception("Service Heartbeat failed to send")
 
     @tasks.loop(minutes=GATEWAY_HEARTBEAT_MINUTES)
     async def discord_gateway_monitor(self):
@@ -123,7 +126,6 @@ class Bot(commands.Bot):
                     await session.get(ping_url)
 
                 logger.info("Discord Gateway Heartbeat sent successfully.")
-
         except Exception:
             logger.exception("Discord Gateway health check failed")
             return None
