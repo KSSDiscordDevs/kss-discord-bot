@@ -106,6 +106,7 @@ class Bot(commands.Bot):
         except Exception:
             logger.exception("Service Heartbeat failed to send")
 
+
     @tasks.loop(minutes=GATEWAY_HEARTBEAT_MINUTES)
     async def discord_gateway_monitor(self):
         """Ping Healthchecks.io only while the bot can actually serve commands."""
