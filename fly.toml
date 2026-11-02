@@ -7,7 +7,6 @@ app = 'discordbot-weathered-raindrop-562'
 primary_region = 'ord'
 
 [build]
-  builder = 'paketobuildpacks/builder:base'
   dockerfile = "Dockerfile"
 
 [env]
