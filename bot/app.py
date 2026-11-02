@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-from supabase import AsyncClient, create_async_client
+from postgrest import AsyncPostgrestClient
 
 from bot.config import (
     API_HEALTH_PROBE_MINUTES,
@@ -27,7 +27,6 @@ from bot.utils.http_monitoring import (
     install_http_monitoring_hook,
 )
 from discord.ext import tasks
-import requests
 import aiohttp
 
 load_dotenv()
@@ -45,7 +44,7 @@ class Bot(commands.Bot):
         intents.presences = True
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
-        self.supabase: AsyncClient | None = None
+        self.supabase: AsyncPostgrestClient | None = None
         self.meal_cache = []
         self._ready_once = False
         # Marked whenever Discord answers a REST call with HTTP 429, whether that is
@@ -72,7 +71,13 @@ class Bot(commands.Bot):
             url = os.environ.get("SUPABASE_URL")
             key = os.environ.get("SUPABASE_SERVICE_KEY")
             if url and key:
-                self.supabase = await create_async_client(url, key)
+                self.supabase = AsyncPostgrestClient(
+                    f"{url.rstrip('/')}/rest/v1",
+                    headers={
+                        "apikey": key,
+                        "Authorization": f"Bearer {key}",
+                    },
+                )
                 print("Async Supabase client initialized")
             else:
                 print(

@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 
 from dateutil.relativedelta import FR, MO, SA, SU, TH, TU, WE, relativedelta
-from supabase import AsyncClient
+from postgrest import AsyncPostgrestClient
 from bot.utils.constants import NOON
 
 from bot.config import (
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class ParkingService:
     """Database-backed business logic for the parking system."""
 
-    def __init__(self, supabase: AsyncClient):
+    def __init__(self, supabase: AsyncPostgrestClient):
         """Use the shared async Supabase client."""
         self.supabase = supabase
 

@@ -4,7 +4,7 @@ import logging
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
-from supabase import Client
+from postgrest import AsyncPostgrestClient
 
 from bot.config import BOT_NAME
 
@@ -22,7 +22,7 @@ class FeedbackModal(ui.Modal, title=f"Improve {BOT_NAME}"):
         max_length=1000,
     )
 
-    def __init__(self, supabase_client: Client):
+    def __init__(self, supabase_client: AsyncPostgrestClient):
         """Store the Supabase client used to save submitted feedback."""
         super().__init__()
         self.supabase = supabase_client
@@ -39,9 +39,7 @@ class FeedbackModal(ui.Modal, title=f"Improve {BOT_NAME}"):
 
         try:
             await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.supabase.table("feedback").insert(payload).execute
-                ),
+                self.supabase.table("feedback").insert(payload).execute(),
                 timeout=10,
             )
         except Exception:
@@ -66,7 +64,7 @@ class Feedback(commands.Cog):
     def __init__(self, bot):
         """Initialize the cog and connect to Supabase."""
         self.bot = bot
-        self.supabase: Client = bot.supabase
+        self.supabase: AsyncPostgrestClient = bot.supabase
 
     @app_commands.command(
         name="feedback",
