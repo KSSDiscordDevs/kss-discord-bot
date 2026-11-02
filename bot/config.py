@@ -127,6 +127,7 @@ INTEREST_CHANNELS = [
 # which is deliberately longer than one probe interval so back-to-back failed
 # probes keep it withheld and Healthchecks.io raises an alert.
 GATEWAY_HEARTBEAT_MINUTES = 3.0
+SERVICE_HEARTBEAT_MINUTES = 2.0
 API_HEALTH_PROBE_MINUTES = 5.0
 RATE_LIMIT_UNHEALTHY_SECONDS = int(API_HEALTH_PROBE_MINUTES * 60 * 2)
 HIGH_GATEWAY_LATENCY_SECONDS = 1.0
