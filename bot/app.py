@@ -13,6 +13,7 @@ from bot.config import (
     API_HEALTH_PROBE_MINUTES,
     EXTENSIONS,
     GATEWAY_HEARTBEAT_MINUTES,
+    SERVICE_HEARTBEAT_MINUTES,
     GUILD_ID,
     HIGH_GATEWAY_LATENCY_SECONDS,
     MY_GUILD,
@@ -88,11 +89,22 @@ class Bot(commands.Bot):
             except Exception as e:
                 print(f"Failed to load {extension}: {e}")
 
-        self.heartbeat_monitor.start()
+        self.discord_gateway_monitor.start()
+        self.service_heartbeat.start()
         self.api_health_prober.start()
 
+    @tasks.loop(minutes=SERVICE_HEARTBEAT_MINUTES)
+    async def service_heartbeat(self):
+        """Ping healthchecks.io as long as the service is up."""
+        ping_url = os.getenv("UPTIME_CHECK_URL")
+
+        async with aiohttp.ClientSession() as session:
+            await session.get(ping_url)
+
+        logger.info("Uptime heartbeat sent succesfully.")
+
     @tasks.loop(minutes=GATEWAY_HEARTBEAT_MINUTES)
-    async def heartbeat_monitor(self):
+    async def discord_gateway_monitor(self):
         """Ping Healthchecks.io only while the bot can actually serve commands."""
         try:
             reason = heartbeat_skip_reason(
@@ -110,12 +122,13 @@ class Bot(commands.Bot):
                 async with aiohttp.ClientSession() as session:
                     await session.get(ping_url)
 
-                logger.info("Heartbeat sent successfully.")
+                logger.info("Discord Gateway Heartbeat sent successfully.")
+
         except Exception:
             logger.exception("Discord Gateway health check failed")
             return None
 
-    @heartbeat_monitor.before_loop
+    @discord_gateway_monitor.before_loop
     async def before_heartbeat(self):
         # Wait until the bot is fully logged in before starting the loop
         await self.wait_until_ready()

@@ -1,7 +1,6 @@
 """Owner-only debug commands for testing internal bot health systems."""
 
 import logging
-import time
 
 import discord
 from discord.ext import commands
@@ -16,32 +15,32 @@ class Debug(commands.Cog):
         self.bot = bot
 
     # ── Option A: Test suppression logic only ─────────────────────────────────
-    # Directly stamps last_rate_limit_timestamp, bypassing the handler entirely.
-    # Verifies that heartbeat_monitor reads the timestamp and skips the ping.
+    # Calls tracker.mark() directly, bypassing the log handler entirely.
+    # Verifies that heartbeat_monitor consults the tracker and skips the ping.
     # Expected: next heartbeat tick (within 3 min) logs
-    #   "Bot was rate-limited within the last 5 minutes. Skipping healthy heartbeat."
+    #   "Withholding gateway heartbeat: Discord answered HTTP 429 ..."
     @commands.command(name="debug_stamp_ratelimit")
     @commands.is_owner()
     async def debug_stamp_ratelimit(self, ctx: commands.Context):
-        """[Option A] Stamp last_rate_limit_timestamp directly to test heartbeat suppression."""
-        self.bot.last_rate_limit_timestamp = time.monotonic()
-        window_min = self.bot.RATE_LIMIT_UNHEALTHY_SECONDS // 60
+        """[Option A] Mark the RateLimitTracker directly to test heartbeat suppression."""
+        self.bot.rate_limits.mark()
+        window_sec = self.bot.rate_limits.unhealthy_seconds
+        window_min = int(window_sec // 60)
         await ctx.send(
-            f"✅ `last_rate_limit_timestamp` stamped.\n"
+            f"✅ `rate_limits.mark()` called. Tracker is now unhealthy for {window_min} min.\n"
             f"The next heartbeat tick (within ~3 min) should log:\n"
-            f"> *Bot was rate-limited within the last {window_min} minutes. Skipping healthy heartbeat.*\n"
-            f"The timestamp will clear automatically after {window_min} min."
+            f"> *Withholding gateway heartbeat: Discord answered HTTP 429 ...*"
         )
 
     # ── Option B: Test detection pipeline only ────────────────────────────────
     # Fires the exact DEBUG log record the webhook client emits on a 429,
-    # then checks whether the handler stamped last_rate_limit_timestamp.
-    # Verifies RateLimitMonitorHandler.emit() fires correctly.
+    # then checks whether RateLimitMonitorHandler.emit() called tracker.mark().
     @commands.command(name="debug_probe_handler")
     @commands.is_owner()
     async def debug_probe_handler(self, ctx: commands.Context):
         """[Option B] Fire a fake webhook 429 log to test RateLimitMonitorHandler."""
-        before = self.bot.last_rate_limit_timestamp
+        was_unhealthy_before = self.bot.rate_limits.is_unhealthy()
+        seconds_before = self.bot.rate_limits.seconds_since_last()
 
         # Emit the exact DEBUG message discord.webhook.async_ logs on a 429
         # (no Via header path — the silent-raise case seen in production logs).
@@ -51,22 +50,29 @@ class Debug(commands.Cog):
             "https://discord.com/api/v10/fake/callback",
         )
 
-        after = self.bot.last_rate_limit_timestamp
-        handler_fired = after != before
+        seconds_after = self.bot.rate_limits.seconds_since_last()
+        # Handler fired if the tracker was just marked (seconds_since_last is
+        # now a very small number, smaller than it was before the probe).
+        handler_fired = (
+            seconds_after is not None
+            and (seconds_before is None or seconds_after < seconds_before)
+        )
 
         if handler_fired:
             await ctx.send(
                 "✅ Handler fired correctly.\n"
-                "`last_rate_limit_timestamp` was updated by `RateLimitMonitorHandler.emit()`.\n"
+                "`RateLimitMonitorHandler.emit()` called `tracker.mark()`.\n"
                 "Detection pipeline is working."
             )
         else:
             await ctx.send(
                 "❌ Handler did **not** fire.\n"
-                "`last_rate_limit_timestamp` was unchanged — check that:\n"
+                "`tracker.seconds_since_last()` was unchanged — check that:\n"
                 "1. `install_http_monitoring_hook()` was called in `setup_hook`.\n"
-                "2. The handler is attached to `discord.webhook.async_`.\n"
-                "3. The handler level is `DEBUG` (not `WARNING`)."
+                "2. The handler is attached to `discord.webhook.async_` logger.\n"
+                "3. The `discord` logger level is DEBUG (set in `configure_logging()`).\n"
+                f"Current tracker state: seconds_since_last={seconds_after}, "
+                f"was_unhealthy_before={was_unhealthy_before}"
             )
 
 
