@@ -123,6 +123,7 @@ class Bot(commands.Bot):
                     await session.get(ping_url)
 
                 logger.info("Discord Gateway Heartbeat sent successfully.")
+
         except Exception:
             logger.exception("Discord Gateway health check failed")
             return None
