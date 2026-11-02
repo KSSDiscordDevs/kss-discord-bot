@@ -90,6 +90,7 @@ class Bot(commands.Bot):
                 print(f"Failed to load {extension}: {e}")
 
         self.discord_gateway_monitor.start()
+        self.service_heartbeat.start()
         self.api_health_prober.start()
 
     @tasks.loop(minutes=SERVICE_HEARTBEAT_MINUTES)
