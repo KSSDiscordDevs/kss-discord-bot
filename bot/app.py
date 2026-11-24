@@ -27,8 +27,9 @@ from bot.utils.http_monitoring import (
     heartbeat_skip_reason,
     install_http_monitoring_hook,
 )
+from pathlib import Path
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 logger = logging.getLogger(__name__)
 
 
@@ -55,20 +56,18 @@ class Bot(commands.Bot):
         """Load configured extensions and sync slash commands to the development guild."""
         install_http_monitoring_hook(self)
         logger.info("Installed HTTP 429 / Cloudflare block monitor.")
-
-        try:
-            conn_str = os.environ.get("MSSQL_CONN_STR")
-            if conn_str:
+        conn_str = os.getenv("MSSQL_CONN_STR")
+        
+        if conn_str:
+            self.supabase = conn_str
+            try:
                 await asyncio.to_thread(lambda: pyodbc.connect(conn_str).close())
-                self.supabase = conn_str
                 print("Local SQL Server connection verified")
-            else:
-                print(
-                    "WARNING: MSSQL_CONN_STR not found. "
-                    "Skipping SQL Server initialization."
-                )
-        except Exception:
-            logger.exception("Failed to connect to local SQL Server")
+            except Exception:
+                logger.exception("Failed to connect to local SQL Server")
+        else:
+            logger.error("MSSQL_CONN_STR is missing from environment / .env!")
+            conn_str = os.environ.get("MSSQL_CONN_STR")
 
         for extension in EXTENSIONS:
             try:

@@ -3,23 +3,38 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+from pathlib import Path
 import sys
 
-from bot.app import bot
-from bot.web.keep_alive import keep_alive
+from dotenv import load_dotenv
+
+# Load .env BEFORE importing bot.app so os.getenv("MSSQL_CONN_STR") is populated
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from bot.app import bot  # noqa: E402
+from bot.web.keep_alive import keep_alive  # noqa: E402
 
 LOG_FILE = "discord_bot.txt"
 
 
-def configure_output_buffering():
-    """Redirect stdout/stderr to the durable log file with line buffering."""
-    log_stream = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
-    sys.stdout = log_stream
-    sys.stderr = log_stream
+class _StreamToLogger:
+    """Forward print() / stdout / stderr writes into Python's logging system."""
+
+    def __init__(self, logger: logging.Logger, level: int):
+        self.logger = logger
+        self.level = level
+
+    def write(self, message: str):
+        message = message.rstrip()
+        if message:
+            self.logger.log(self.level, message)
+
+    def flush(self):
+        pass
 
 
 def configure_logging():
-    """Send the bot's own INFO+ logs and discord.py's DEBUG logs to a rotating file."""
+    """Send all logs and stdout/stderr through a single RotatingFileHandler."""
     handler = RotatingFileHandler(
         filename=LOG_FILE,
         encoding="utf-8",
@@ -38,10 +53,11 @@ def configure_logging():
     # Keep DEBUG for the handshake details; records propagate to the root handler.
     logging.getLogger("discord").setLevel(logging.DEBUG)
 
+    # Route print() and uncaught stderr through the same single file handler
+    # so no second file
 
 if __name__ == "__main__":
-    # 1. Route output and logging to discord_bot.txt before anything else starts
-    configure_output_buffering()
+    # 1. Configure single-handle rotating file logging before anything else starts
     configure_logging()
 
     # 2. Start the web server
@@ -53,4 +69,5 @@ if __name__ == "__main__":
         logging.critical("FATAL: DISCORD_TOKEN is missing from environment variables!")
     else:
         # log_handler=None because logging is configured above
-        bot.run(token, log_handler=None)
+        bot.run(token, log_handler=None) 
+
