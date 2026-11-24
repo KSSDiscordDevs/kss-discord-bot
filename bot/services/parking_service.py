@@ -2,8 +2,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+import pyodbc
 from dateutil.relativedelta import FR, MO, SA, SU, TH, TU, WE, relativedelta
-from postgrest import AsyncPostgrestClient
 from bot.utils.constants import NOON
 
 from bot.config import (
@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 class ParkingService:
     """Database-backed business logic for the parking system."""
 
-    def __init__(self, supabase: AsyncPostgrestClient):
-        """Use the shared async Supabase client."""
-        self.supabase = supabase
+    def __init__(self, conn_str: str):
+        """Use the shared SQL Server connection string."""
+        self.conn_str = conn_str
 
         self._spot_mutation_locks = {}
         self._staff_mutation_lock = asyncio.Lock()
@@ -34,27 +34,47 @@ class ParkingService:
         self.active_offers_cache = []
         self.active_claims_cache = []
 
+    def _rows_to_dicts(self, cursor: pyodbc.Cursor) -> list[dict]:
+        """Convert pyodbc rows into dicts matching the original Supabase record shape."""
+        if not cursor.description:
+            return []
+        columns = [col[0] for col in cursor.description]
+        rows = []
+        for row in cursor.fetchall():
+            record = {}
+            for col, val in zip(columns, row):
+                if isinstance(val, datetime):
+                    record[col] = val.isoformat()
+                elif val is not None and col in ("id", "offer_id"):
+                    record[col] = str(val)
+                else:
+                    record[col] = val
+            rows.append(record)
+        return rows
+
     async def refresh_parking_cache(self):
-        """Fetches active offers/claims from Supabase and stores them in memory."""
+        """Fetches active offers/claims from SQL Server and stores them in memory."""
+        def _query():
+            now_dt = datetime.now(LOCAL_TZ)
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM dbo.parking_offers WHERE end_time > ?",
+                    (now_dt,),
+                )
+                offers_data = self._rows_to_dicts(cursor)
+
+                cursor.execute(
+                    "SELECT * FROM dbo.parking_reservations WHERE end_time > ?",
+                    (now_dt,),
+                )
+                claims_data = self._rows_to_dicts(cursor)
+            return offers_data, claims_data
+
         try:
-            now_iso = datetime.now(LOCAL_TZ).isoformat()
-
-            # Run sequentially instead of using asyncio.gather to satisfy strict lock testing
-            offers = await (
-                self.supabase.table("parking_offers")
-                .select("*")
-                .gt("end_time", now_iso)
-                .execute()
-            )
-            claims = await (
-                self.supabase.table("parking_reservations")
-                .select("*")
-                .gt("end_time", now_iso)
-                .execute()
-            )
-
-            self.active_offers_cache = offers.data
-            self.active_claims_cache = claims.data
+            offers_data, claims_data = await asyncio.to_thread(_query)
+            self.active_offers_cache = offers_data
+            self.active_claims_cache = claims_data
             logger.info(
                 f"Parking cache refreshed: {len(self.active_offers_cache)} offers, {len(self.active_claims_cache)} claims."
             )
@@ -69,33 +89,32 @@ class ParkingService:
 
     async def save_offer_spot_preference(self, user_id, username, spot):
         """Persist the caller's last successful offer spot without failing the command."""
+        def _update():
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                # Clear any existing spot ownership for this user
+                cursor.execute(
+                    """
+                    UPDATE dbo.parking_spots
+                    SET discord_userid = NULL, discord_nickname = NULL
+                    WHERE discord_userid = ?
+                    """,
+                    (str(user_id),),
+                )
+
+                # Set ownership on the newly offered spot
+                cursor.execute(
+                    """
+                    UPDATE dbo.parking_spots
+                    SET discord_userid = ?, discord_nickname = ?
+                    WHERE spot_number = ?
+                    """,
+                    (str(user_id), username, int(spot)),
+                )
+                conn.commit()
+
         try:
-            # Clear any existing spot ownership for this user
-            await (
-                self.supabase.table("parking_spots")
-                .update(
-                    {
-                        "discord_userid": None,
-                        "discord_nickname": None,
-                    }
-                )
-                .eq("discord_userid", str(user_id))
-                .execute()
-            )
-
-            # Set ownership on the newly offered spot
-            await (
-                self.supabase.table("parking_spots")
-                .update(
-                    {
-                        "discord_userid": str(user_id),
-                        "discord_nickname": username,
-                    }
-                )
-                .eq("spot_number", int(spot))
-                .execute()
-            )
-
+            await asyncio.to_thread(_update)
             return True
         except Exception:
             logger.exception(
@@ -141,63 +160,60 @@ class ParkingService:
 
     async def load_cache(self):
         """Load mostly-static data into memory to reduce database hits."""
+        def _query():
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT spot_number FROM dbo.parking_spots WHERE is_guest = 1"
+                )
+                return {int(row[0]) for row in cursor.fetchall()}
+
         try:
-            response = await (
-                self.supabase.table("parking_spots")
-                .select("spot_number")
-                .eq("is_guest", True)
-                .execute()
-            )
-            self.guest_spots_cache = {int(row["spot_number"]) for row in response.data}
+            self.guest_spots_cache = await asyncio.to_thread(_query)
             logger.info(f"Loaded {len(self.guest_spots_cache)} guest spots into cache.")
         except Exception:
             logger.exception("Failed to load parking spot cache.")
 
     async def initialize_spots(self):
         """Synchronize the database parking spot table ONLY if it is completely empty."""
+        def _init():
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                # 1. Fast check to see if ANY row exists
+                cursor.execute("SELECT TOP 1 spot_number FROM dbo.parking_spots")
+                if cursor.fetchone():
+                    logger.info(
+                        "parking_spots table is already populated. Skipping initialization."
+                    )
+                    return  # Early return, do not overwrite existing data
+
+                logger.info("parking_spots table is empty. Initializing default spots...")
+
+                all_configs = []
+
+                # 2. Format standard spots
+                for spot in PERMIT_SPOTS:
+                    all_configs.append((spot, "resident", 0))
+
+                # 3. Format staff spots
+                for spot in STAFF_SPOTS:
+                    all_configs.append((spot, "staff", 0))
+
+                # 4. Batch insert all new spots
+                cursor.execute("SET IDENTITY_INSERT dbo.parking_spots ON;")
+                cursor.executemany(
+                    """
+                    INSERT INTO dbo.parking_spots (spot_number, spot_type, is_guest)
+                    VALUES (?, ?, ?)
+                    """,
+                    all_configs,
+                )
+                cursor.execute("SET IDENTITY_INSERT dbo.parking_spots OFF;")
+                conn.commit()
+                logger.info(f"Successfully initialized {len(all_configs)} parking spots!")
+
         try:
-            # 1. Fast check to see if ANY row exists
-            check_response = await (
-                self.supabase.table("parking_spots")
-                .select("spot_number")
-                .limit(1)
-                .execute()
-            )
-
-            if check_response.data:
-                logger.info(
-                    "parking_spots table is already populated. Skipping initialization."
-                )
-                return  # Early return, do not overwrite existing data
-
-            logger.info("parking_spots table is empty. Initializing default spots...")
-
-            all_configs = []
-
-            # 2. Format standard spots
-            for spot in PERMIT_SPOTS:
-                all_configs.append(
-                    {
-                        "spot_number": spot,
-                        "spot_type": "resident",
-                        "is_guest": False,
-                    }
-                )
-
-            # 3. Format staff spots
-            for spot in STAFF_SPOTS:
-                all_configs.append(
-                    {
-                        "spot_number": spot,
-                        "spot_type": "staff",
-                        "is_guest": False,
-                    }
-                )
-
-            # 4. Batch insert all new spots
-            await self.supabase.table("parking_spots").insert(all_configs).execute()
-            logger.info(f"Successfully initialized {len(all_configs)} parking spots!")
-
+            await asyncio.to_thread(_init)
         except Exception:
             logger.exception("Parking spot initialization failed")
 
@@ -241,7 +257,7 @@ class ParkingService:
         now_iso = now.isoformat()
         cutoff_iso = cutoff.isoformat()
 
-        # Filter the local memory exactly like Supabase would
+        # Filter the local memory exactly like SQL Server would
         valid_offers = [
             o
             for o in self.active_offers_cache
@@ -257,37 +273,47 @@ class ParkingService:
 
     async def create_offers(self, user_id, username, spot, base_start, base_end, weeks):
         """Create one or more weekly parking offers and return a user-facing confirmation."""
-        async with self._get_mutation_lock_for_spot(spot):
-            try:
+        def _create():
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
                 all_offers = []
                 for i in range(weeks):
                     start = base_start + timedelta(weeks=i)
                     end = base_end + timedelta(weeks=i)
 
-                    existing = await (
-                        self.supabase.table("parking_offers")
-                        .select("*")
-                        .eq("spot_number", int(spot))
-                        .lt("start_time", end.isoformat())
-                        .gt("end_time", start.isoformat())
-                        .execute()
+                    cursor.execute(
+                        """
+                        SELECT TOP 1 id FROM dbo.parking_offers
+                        WHERE spot_number = ? AND start_time < ? AND end_time > ?
+                        """,
+                        (int(spot), end, start),
                     )
 
-                    if not existing.data:
+                    if not cursor.fetchone():
                         all_offers.append(
-                            {
-                                "spot_number": int(spot),
-                                "owner_id": str(user_id),
-                                "owner_discord_username": username,
-                                "start_time": start.isoformat(),
-                                "end_time": end.isoformat(),
-                            }
+                            (int(spot), str(user_id), username, start, end)
                         )
 
                 if not all_offers:
-                    return False, "❌ This spot is already offered for those times."
+                    return False
 
-                await self.supabase.table("parking_offers").insert(all_offers).execute()
+                cursor.executemany(
+                    """
+                    INSERT INTO dbo.parking_offers (
+                        spot_number, owner_id, owner_discord_username, start_time, end_time
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    all_offers,
+                )
+                conn.commit()
+                return True
+
+        async with self._get_mutation_lock_for_spot(spot):
+            try:
+                created = await asyncio.to_thread(_create)
+                if not created:
+                    return False, "❌ This spot is already offered for those times."
 
                 start_label = self._format_datetime_label(base_start)
                 end_label = self._format_datetime_label(base_end)
@@ -306,48 +332,50 @@ class ParkingService:
 
     async def claim_resident_spot(self, user_id, username, spot, start, end):
         """Reserve a guest spot or a resident spot covered by an existing offer."""
+        def _claim():
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT TOP 1 id FROM dbo.parking_reservations
+                    WHERE spot_number = ? AND start_time < ? AND end_time > ?
+                    """,
+                    (int(spot), end, start),
+                )
+
+                if cursor.fetchone():
+                    return False, f"❌ Spot {spot} is already reserved."
+
+                offer_id = None
+                if int(spot) not in self.guest_spots_cache:
+                    cursor.execute(
+                        """
+                        SELECT TOP 1 id FROM dbo.parking_offers
+                        WHERE spot_number = ? AND start_time <= ? AND end_time >= ?
+                        """,
+                        (int(spot), start, end),
+                    )
+                    offer_row = cursor.fetchone()
+                    if not offer_row:
+                        return False, f"❌ Spot {spot} isn't offered for that window."
+                    offer_id = str(offer_row[0])
+
+                cursor.execute(
+                    """
+                    INSERT INTO dbo.parking_reservations (
+                        spot_number, claimer_id, claimer_discord_username, start_time, end_time, offer_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (int(spot), str(user_id), username, start, end, offer_id),
+                )
+                conn.commit()
+                return True, None
+
         async with self._get_mutation_lock_for_spot(spot):
-            conflict = await (
-                self.supabase.table("parking_reservations")
-                .select("*")
-                .eq("spot_number", int(spot))
-                .lt("start_time", end.isoformat())
-                .gt("end_time", start.isoformat())
-                .execute()
-            )
-
-            if conflict.data:
-                return False, f"❌ Spot {spot} is already reserved."
-
-            offer_id = None
-            if int(spot) not in self.guest_spots_cache:
-                offer = await (
-                    self.supabase.table("parking_offers")
-                    .select("id")
-                    .eq("spot_number", int(spot))
-                    .lte("start_time", start.isoformat())
-                    .gte("end_time", end.isoformat())
-                    .execute()
-                )
-
-                if not offer.data:
-                    return False, f"❌ Spot {spot} isn't offered for that window."
-                offer_id = offer.data[0]["id"]
-
-            (
-                await self.supabase.table("parking_reservations")
-                .insert(
-                    {
-                        "spot_number": int(spot),
-                        "claimer_id": str(user_id),
-                        "claimer_discord_username": username,
-                        "start_time": start.isoformat(),
-                        "end_time": end.isoformat(),
-                        "offer_id": offer_id,
-                    }
-                )
-                .execute()
-            )
+            ok, err_msg = await asyncio.to_thread(_claim)
+            if not ok:
+                return False, err_msg
 
             start_label = self._format_datetime_label(start)
             end_label = self._format_datetime_label(end)
@@ -361,40 +389,44 @@ class ParkingService:
 
     async def claim_staff_spot(self, user_id, username, start, end):
         """Assign the first available staff spot for a requested window."""
+        def _claim():
+            placeholders = ", ".join("?" for _ in STAFF_SPOTS)
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT spot_number FROM dbo.parking_reservations
+                    WHERE spot_number IN ({placeholders}) AND start_time < ? AND end_time > ?
+                    """,
+                    [*STAFF_SPOTS, end, start],
+                )
+                occupied = [int(row[0]) for row in cursor.fetchall()]
+
+                if len(occupied) >= len(STAFF_SPOTS):
+                    return False
+
+                assigned = (
+                    STAFF_SPOTS[0] if STAFF_SPOTS[0] not in occupied else STAFF_SPOTS[1]
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO dbo.parking_reservations (
+                        spot_number, claimer_id, claimer_discord_username, start_time, end_time
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (assigned, str(user_id), username, start, end),
+                )
+                conn.commit()
+                return True
+
         async with self._staff_mutation_lock:
             if self.is_blackout(start, end):
                 return False, "❌ Blackout hours active."
 
-            conflicts = await (
-                self.supabase.table("parking_reservations")
-                .select("spot_number")
-                .in_("spot_number", STAFF_SPOTS)
-                .lt("start_time", end.isoformat())
-                .gt("end_time", start.isoformat())
-                .execute()
-            )
-
-            occupied = [int(row["spot_number"]) for row in conflicts.data]
-
-            if len(occupied) >= len(STAFF_SPOTS):
+            ok = await asyncio.to_thread(_claim)
+            if not ok:
                 return False, "❌ Staff spots are full."
-
-            assigned = (
-                STAFF_SPOTS[0] if STAFF_SPOTS[0] not in occupied else STAFF_SPOTS[1]
-            )
-            await (
-                self.supabase.table("parking_reservations")
-                .insert(
-                    {
-                        "spot_number": assigned,
-                        "claimer_id": str(user_id),
-                        "claimer_discord_username": username,
-                        "start_time": start.isoformat(),
-                        "end_time": end.isoformat(),
-                    }
-                )
-                .execute()
-            )
 
             start_label = self._format_datetime_label(start)
             end_label = self._format_datetime_label(end)
@@ -408,18 +440,21 @@ class ParkingService:
 
     async def cancel_action(self, user_id, action_type, record_id):
         """Cancel one selected offer or reservation and return any affected user mentions."""
-        try:
+        def _lookup_spot():
             table_name = (
                 "parking_offers" if action_type == "offer" else "parking_reservations"
             )
-            response = await (
-                self.supabase.table(table_name)
-                .select("spot_number")
-                .eq("id", str(record_id))
-                .execute()
-            )
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT spot_number FROM dbo.{table_name} WHERE id = ?",
+                    (str(record_id),),
+                )
+                row = cursor.fetchone()
+                return int(row[0]) if row else None
 
-            spot = int(response.data[0]["spot_number"]) if response.data else None
+        try:
+            spot = await asyncio.to_thread(_lookup_spot)
         except Exception:
             spot = None
 
@@ -429,73 +464,82 @@ class ParkingService:
             else self._fallback_mutation_lock
         )
 
+        def _cancel():
+            now_dt = datetime.now(LOCAL_TZ)
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+
+                if action_type == "offer":
+                    cursor.execute(
+                        """
+                        SELECT * FROM dbo.parking_offers
+                        WHERE owner_id = ? AND id = ? AND end_time > ?
+                        """,
+                        (str(user_id), str(record_id), now_dt),
+                    )
+                    offers = self._rows_to_dicts(cursor)
+                    if not offers:
+                        return "no_offer", None, None
+
+                    offer = offers[0]
+                    cursor.execute(
+                        "SELECT claimer_id FROM dbo.parking_reservations WHERE offer_id = ?",
+                        (str(record_id),),
+                    )
+                    claimer_rows = cursor.fetchall()
+
+                    cursor.execute(
+                        "DELETE FROM dbo.parking_reservations WHERE offer_id = ?",
+                        (str(record_id),),
+                    )
+                    cursor.execute(
+                        "DELETE FROM dbo.parking_offers WHERE id = ?",
+                        (str(record_id),),
+                    )
+                    conn.commit()
+                    pings = list({f"<@{r[0]}>" for r in claimer_rows if r[0]})
+                    return "offer_ok", offer, pings
+
+                cursor.execute(
+                    """
+                    SELECT * FROM dbo.parking_reservations
+                    WHERE claimer_id = ? AND id = ? AND end_time > ?
+                    """,
+                    (str(user_id), str(record_id), now_dt),
+                )
+                reservations = self._rows_to_dicts(cursor)
+                if not reservations:
+                    return "no_claim", None, None
+
+                reservation = reservations[0]
+                cursor.execute(
+                    "DELETE FROM dbo.parking_reservations WHERE id = ?",
+                    (str(record_id),),
+                )
+                conn.commit()
+                return "claim_ok", reservation, None
+
         async with lock:
-            now_iso = datetime.now(LOCAL_TZ).isoformat()
+            status, record, pings = await asyncio.to_thread(_cancel)
 
-            if action_type == "offer":
-                target = await (
-                    self.supabase.table("parking_offers")
-                    .select("*")
-                    .eq("owner_id", str(user_id))
-                    .eq("id", str(record_id))
-                    .gt("end_time", now_iso)
-                    .execute()
-                )
+            if status == "no_offer":
+                return False, "No matching offers.", None
 
-                if not target.data:
-                    return False, "No matching offers.", None
-
-                offer = target.data[0]
-                claims = await (
-                    self.supabase.table("parking_reservations")
-                    .select("claimer_id")
-                    .eq("offer_id", str(record_id))
-                    .execute()
-                )
-                await (
-                    self.supabase.table("parking_reservations")
-                    .delete()
-                    .eq("offer_id", str(record_id))
-                    .execute()
-                )
-                await (
-                    self.supabase.table("parking_offers")
-                    .delete()
-                    .eq("id", str(record_id))
-                    .execute()
-                )
-                pings = list({f"<@{c['claimer_id']}>" for c in claims.data})
-
+            if status == "offer_ok":
                 spot_label = (
                     "Staff Spot"
-                    if offer["spot_number"] in STAFF_SPOTS
-                    else f"Spot {offer['spot_number']}"
+                    if record["spot_number"] in STAFF_SPOTS
+                    else f"Spot {record['spot_number']}"
                 )
                 return True, f"🔄 {spot_label} offer withdrawn.", pings
 
-            target = await (
-                self.supabase.table("parking_reservations")
-                .select("*")
-                .eq("claimer_id", str(user_id))
-                .eq("id", str(record_id))
-                .gt("end_time", now_iso)
-                .execute()
-            )
-
-            if not target.data:
+            if status == "no_claim":
                 return False, "No matching claims.", None
 
-            reservation = target.data[0]
-            await (
-                self.supabase.table("parking_reservations")
-                .delete()
-                .eq("id", str(record_id))
-                .execute()
-            )
             spot_label = (
                 "Staff Spot"
-                if reservation["spot_number"] in STAFF_SPOTS
-                else f"Spot {reservation['spot_number']}"
+                if record["spot_number"] in STAFF_SPOTS
+                else f"Spot {record['spot_number']}"
             )
 
             await self.refresh_parking_cache()
@@ -507,7 +551,7 @@ class ParkingService:
         now_iso = datetime.now(LOCAL_TZ).isoformat()
         user_str = str(user_id)
 
-        # Filter the global cache instead of querying Supabase
+        # Filter the global cache instead of querying SQL Server
         user_offers = [
             offer
             for offer in self.active_offers_cache
@@ -527,7 +571,7 @@ class ParkingService:
         now_iso = now.isoformat()
         user_str = str(user_id)
 
-        # Filter the global cache instead of querying Supabase
+        # Filter the global cache instead of querying SQL Server
         user_offers = [
             offer
             for offer in self.active_offers_cache

@@ -1,33 +1,32 @@
 """Bot application setup, command registration, and startup hooks."""
 
+import asyncio
 import logging
 import os
 
+import aiohttp
 import discord
+import pyodbc
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
-from postgrest import AsyncPostgrestClient
 
 from bot.config import (
     API_HEALTH_PROBE_MINUTES,
     EXTENSIONS,
     GATEWAY_HEARTBEAT_MINUTES,
-    SERVICE_HEARTBEAT_MINUTES,
     GUILD_ID,
     HIGH_GATEWAY_LATENCY_SECONDS,
     MY_GUILD,
     RATE_LIMIT_UNHEALTHY_SECONDS,
+    SERVICE_HEARTBEAT_MINUTES,
 )
-from bot.utils.database import ensure_tables_exist
 from bot.utils.discord_http_logging import HTTP_TOO_MANY_REQUESTS
 from bot.utils.http_monitoring import (
     RateLimitTracker,
     heartbeat_skip_reason,
     install_http_monitoring_hook,
 )
-from discord.ext import tasks
-import aiohttp
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -44,7 +43,7 @@ class Bot(commands.Bot):
         intents.presences = True
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
-        self.supabase: AsyncPostgrestClient | None = None
+        self.supabase: str | None = None
         self.meal_cache = []
         self._ready_once = False
         # Marked whenever Discord answers a REST call with HTTP 429, whether that is
@@ -58,34 +57,18 @@ class Bot(commands.Bot):
         logger.info("Installed HTTP 429 / Cloudflare block monitor.")
 
         try:
-            db_url = os.environ.get("SUPABASE_DB_URL")
-            if db_url:
-                print("Verifying database schema...")
-                await ensure_tables_exist(db_url)
-            else:
-                print("WARNING: SUPABASE_DB_URL not found. Skipping schema creation.")
-        except Exception:
-            logger.exception("Failed to verify database schema")
-
-        try:
-            url = os.environ.get("SUPABASE_URL")
-            key = os.environ.get("SUPABASE_SERVICE_KEY")
-            if url and key:
-                self.supabase = AsyncPostgrestClient(
-                    f"{url.rstrip('/')}/rest/v1",
-                    headers={
-                        "apikey": key,
-                        "Authorization": f"Bearer {key}",
-                    },
-                )
-                print("Async Supabase client initialized")
+            conn_str = os.environ.get("MSSQL_CONN_STR")
+            if conn_str:
+                await asyncio.to_thread(lambda: pyodbc.connect(conn_str).close())
+                self.supabase = conn_str
+                print("Local SQL Server connection verified")
             else:
                 print(
-                    "WARNING: SUPABASE_URL or SUPABASE_SERVICE_KEY not found. "
-                    "Skipping Supabase client initialization."
+                    "WARNING: MSSQL_CONN_STR not found. "
+                    "Skipping SQL Server initialization."
                 )
         except Exception:
-            logger.exception("Failed to initialize Supabase client")
+            logger.exception("Failed to connect to local SQL Server")
 
         for extension in EXTENSIONS:
             try:
@@ -103,14 +86,13 @@ class Bot(commands.Bot):
         """Ping healthchecks.io as long as the service is up."""
         try:
             ping_url = os.getenv("UPTIME_CHECK_URL")
+            if ping_url:
+                async with aiohttp.ClientSession() as session:
+                    await session.get(ping_url)
 
-            async with aiohttp.ClientSession() as session:
-                await session.get(ping_url)
-
-            logger.info("Uptime heartbeat sent succesfully.")
+                logger.info("Uptime heartbeat sent succesfully.")
         except Exception:
             logger.exception("Service Heartbeat failed to send")
-
 
     @tasks.loop(minutes=GATEWAY_HEARTBEAT_MINUTES)
     async def discord_gateway_monitor(self):
@@ -200,8 +182,14 @@ class Bot(commands.Bot):
         )
 
         try:
-            response = await self.supabase.table("meals").select("*").execute()
-            self.meal_cache = response.data
+            def _load_meals():
+                with pyodbc.connect(self.supabase) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM dbo.meals")
+                    cols = [col[0] for col in cursor.description]
+                    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+            self.meal_cache = await asyncio.to_thread(_load_meals)
             print(f"Cached {len(self.meal_cache)} meals")
         except Exception as e:
             print(f"Failed to cache meals: {e}")

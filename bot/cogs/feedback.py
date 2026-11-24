@@ -2,9 +2,9 @@ import asyncio
 import logging
 
 import discord
+import pyodbc
 from discord import app_commands, ui
 from discord.ext import commands
-from postgrest import AsyncPostgrestClient
 
 from bot.config import BOT_NAME
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class FeedbackModal(ui.Modal, title=f"Improve {BOT_NAME}"):
-    """Modal used to collect free-form feedback and persist it to Supabase."""
+    """Modal used to collect free-form feedback and persist it to SQL Server."""
 
     suggestion = ui.TextInput(
         label="What should we add or change?",
@@ -22,10 +22,10 @@ class FeedbackModal(ui.Modal, title=f"Improve {BOT_NAME}"):
         max_length=1000,
     )
 
-    def __init__(self, supabase_client: AsyncPostgrestClient):
-        """Store the Supabase client used to save submitted feedback."""
+    def __init__(self, conn_str: str):
+        """Store the SQL Server connection string used to save submitted feedback."""
         super().__init__()
-        self.supabase = supabase_client
+        self.conn_str = conn_str
 
     async def on_submit(self, interaction: discord.Interaction):
         """Persist the submitted suggestion and acknowledge the user privately."""
@@ -37,9 +37,25 @@ class FeedbackModal(ui.Modal, title=f"Improve {BOT_NAME}"):
 
         await interaction.response.defer(ephemeral=True)
 
+        def _insert():
+            with pyodbc.connect(self.conn_str) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO dbo.feedback (user_id, user_name, content)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        payload["user_id"],
+                        payload["user_name"],
+                        payload["content"],
+                    ),
+                )
+                conn.commit()
+
         try:
             await asyncio.wait_for(
-                self.supabase.table("feedback").insert(payload).execute(),
+                asyncio.to_thread(_insert),
                 timeout=10,
             )
         except Exception:
@@ -62,9 +78,9 @@ class Feedback(commands.Cog):
     """Slash command group for collecting user feedback."""
 
     def __init__(self, bot):
-        """Initialize the cog and connect to Supabase."""
+        """Initialize the cog and store the SQL Server connection string."""
         self.bot = bot
-        self.supabase: AsyncPostgrestClient = bot.supabase
+        self.supabase: str = bot.supabase
 
     @app_commands.command(
         name="feedback",
