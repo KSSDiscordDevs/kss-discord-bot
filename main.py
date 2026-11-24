@@ -1,50 +1,46 @@
 """Thin runtime entrypoint for the Discord bot."""
 
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 
 from bot.app import bot
 from bot.web.keep_alive import keep_alive
 
+LOG_FILE = "discord_bot.txt"
+
 
 def configure_output_buffering():
-    """Line-buffer stdout/stderr so log lines reach the host as they happen.
-
-    Hosts capture output through a pipe, so Python block-buffers print() unless
-    output is explicitly line-buffered.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(line_buffering=True)
-        except (AttributeError, ValueError):
-            pass
+    """Redirect stdout/stderr to the durable log file with line buffering."""
+    log_stream = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    sys.stdout = log_stream
+    sys.stderr = log_stream
 
 
 def configure_logging():
-    """Send the bot's own INFO+ logs and discord.py's DEBUG logs to one handler."""
-    handler = logging.StreamHandler()
+    """Send the bot's own INFO+ logs and discord.py's DEBUG logs to a rotating file."""
+    handler = RotatingFileHandler(
+        filename=LOG_FILE,
+        encoding="utf-8",
+        maxBytes=5 * 1024 * 1024,  # 5 MB per file
+        backupCount=5,             # Keeps discord_bot.txt.1 through .5
+    )
     handler.setFormatter(
         logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s")
     )
 
-    # Attaching the handler to the root logger means bot.* loggers (INFO and up)
-    # actually reach the log stream. Previously only "discord" had a handler, so
-    # every logger.info() in the bot's own code was dropped.
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+    root.handlers.clear()
     root.addHandler(handler)
 
     # Keep DEBUG for the handshake details; records propagate to the root handler.
     logging.getLogger("discord").setLevel(logging.DEBUG)
 
-    # Supabase's HTTP client logs one INFO line per query; keep those quiet.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
 
 if __name__ == "__main__":
-    # 1. Make output and logging usable before anything else starts
+    # 1. Route output and logging to discord_bot.txt before anything else starts
     configure_output_buffering()
     configure_logging()
 
@@ -54,7 +50,7 @@ if __name__ == "__main__":
     # 3. Run the bot
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        print("FATAL: DISCORD_TOKEN is missing from environment variables!")
+        logging.critical("FATAL: DISCORD_TOKEN is missing from environment variables!")
     else:
         # log_handler=None because logging is configured above
         bot.run(token, log_handler=None)
