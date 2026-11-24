@@ -7,6 +7,7 @@ import aiohttp
 import pyodbc
 
 from bot.config import HOUSE_ROLE_CONFIG, LATES_VIEW_GROUPS
+from bot.utils.db import get_mssql_connection
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class LatesService:
     async def refresh_lates_cache(self):
         """Fetches all active late plates from SQL Server and stores them in memory."""
         def _query():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM dbo.lates")
                 return self._rows_to_dicts(cursor)
@@ -67,7 +68,7 @@ class LatesService:
     async def perform_cleanup(self, day_to_clean=None):
         """Delete temporary lates for a specific day or for all days."""
         def _delete():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 if day_to_clean:
                     cursor.execute(
@@ -142,7 +143,7 @@ class LatesService:
         }
 
         def _insert():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
@@ -184,7 +185,7 @@ class LatesService:
     async def clear_late(self, user_id, day, meal):
         """Delete one late request for the caller."""
         def _delete_one():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """

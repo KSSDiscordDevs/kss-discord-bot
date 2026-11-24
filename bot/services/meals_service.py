@@ -8,6 +8,7 @@ import pyodbc
 
 from bot.config import LOCAL_TZ
 from bot.utils.meal_calendar import AcademicBreak, MealCalendarConfig
+from bot.utils.db import get_mssql_connection
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class MealsService:
     async def initialize_meals(self):
         """Initialize the meal calendar, academic breaks, and parse the CSV menu."""
         def _init():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
 
                 # 1. Initialize the active calendar if it doesn't exist
@@ -146,7 +147,7 @@ class MealsService:
     async def refresh_calendar_config(self) -> bool:
         """Queries SQL Server for the active meal calendar and caches it."""
         def _query():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT * FROM dbo.meal_calendars WHERE is_active = 1"

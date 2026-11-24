@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import pyodbc
 from dateutil.relativedelta import FR, MO, SA, SU, TH, TU, WE, relativedelta
 from bot.utils.constants import NOON
+from bot.utils.db import get_mssql_connection
 
 from bot.config import (
     LOCAL_TZ,
@@ -56,7 +57,7 @@ class ParkingService:
         """Fetches active offers/claims from SQL Server and stores them in memory."""
         def _query():
             now_dt = datetime.now(LOCAL_TZ)
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT * FROM dbo.parking_offers WHERE end_time > ?",
@@ -90,7 +91,7 @@ class ParkingService:
     async def save_offer_spot_preference(self, user_id, username, spot):
         """Persist the caller's last successful offer spot without failing the command."""
         def _update():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 # Clear any existing spot ownership for this user
                 cursor.execute(
@@ -161,7 +162,7 @@ class ParkingService:
     async def load_cache(self):
         """Load mostly-static data into memory to reduce database hits."""
         def _query():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT spot_number FROM dbo.parking_spots WHERE is_guest = 1"
@@ -177,7 +178,7 @@ class ParkingService:
     async def initialize_spots(self):
         """Synchronize the database parking spot table ONLY if it is completely empty."""
         def _init():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 # 1. Fast check to see if ANY row exists
                 cursor.execute("SELECT TOP 1 spot_number FROM dbo.parking_spots")
@@ -274,7 +275,7 @@ class ParkingService:
     async def create_offers(self, user_id, username, spot, base_start, base_end, weeks):
         """Create one or more weekly parking offers and return a user-facing confirmation."""
         def _insert_offers():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 all_offers = []
                 for i in range(weeks):
@@ -333,7 +334,7 @@ class ParkingService:
     async def claim_resident_spot(self, user_id, username, spot, start, end):
         """Reserve a guest spot or a resident spot covered by an existing offer."""
         def _claim():
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
@@ -391,7 +392,7 @@ class ParkingService:
         """Assign the first available staff spot for a requested window."""
         def _claim_staff():
             placeholders = ", ".join("?" for _ in STAFF_SPOTS)
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     f"""
@@ -444,7 +445,7 @@ class ParkingService:
             table_name = (
                 "parking_offers" if action_type == "offer" else "parking_reservations"
             )
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     f"SELECT spot_number FROM dbo.{table_name} WHERE id = ?",
@@ -466,7 +467,7 @@ class ParkingService:
 
         def _execute_cancel():
             now_dt = datetime.now(LOCAL_TZ)
-            with pyodbc.connect(self.conn_str) as conn:
+            with get_mssql_connection(self.conn_str) as conn:
                 cursor = conn.cursor()
 
                 if action_type == "offer":
